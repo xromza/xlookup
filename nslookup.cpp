@@ -5,9 +5,9 @@
 #include <WinSock2.h>
 #include <sstream>
 #include <WS2tcpip.h>
+#include <regex>
 #pragma comment(lib, "Ws2_32.lib")
-#include <random>
-#define BUF_SIZE 1024
+constexpr int BUF_SIZE = 1024;
 
 const std::map <uint8_t, char> m = {
 	{10, 'A'},
@@ -18,38 +18,36 @@ const std::map <uint8_t, char> m = {
 	{15, 'F'}
 };
 
-const std::map <uint8_t, std::string> dns_types = {
-	{0x01, "A"},
-	{0x1C, "AAAA"},
-	{0x05, "CNAME"},
-	{0x0F, "MX"},
-	{0x02, "NS"}
+const std::map <uint16_t, std::string> dns_types = {
+	{0x0001, "A"},
+	{0x001C, "AAAA"},
+	{0x0005, "CNAME"},
+	{0x000F, "MX"},
+	{0x0002, "NS"}
 };
 
-char resNum(unsigned int num) {
+char static resNum(unsigned int num) {
 	if (num < 10) return '0' + num;
 	else return m.at(num);
 }
 
-std::string parse_dns_name(const uint8_t* packet, size_t& offset, size_t max_len) {
+std::regex ip_port("^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-3][0-5])$");
+std::regex ip_not_port("^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$");
+std::string static parse_dns_name(const uint8_t* packet, size_t& offset, size_t max_len) {
 	std::string name;
-	size_t current = offset; // Используем локальный курсор, чтобы не ломать offset из main при прыжках
-	bool jumped = false;     // Флаг: переходили ли мы по ссылке?
-	size_t stop_offset = 0;  // Позиция, которую мы вернем в main (куда сдвинуть курсор)
+	size_t current = offset;
+	bool jumped = false;
+	size_t stop_offset = 0; 
 	int hops = 0;
 
-	while (hops < 5) { // Защита от зацикливания
+	while (hops < 5) {
 		if (current >= max_len) break;
 
 		uint8_t len = packet[current];
 
-		// 1. Сжатая ссылка (начинается с 11xxxxxx, т.е. >= 0xC0)
 		if ((len & 0xC0) == 0xC0) {
 			if (current + 1 >= max_len) break;
 
-			// Если мы встретили ссылку впервые, то реальный сдвиг курсора в main
-			// должен быть только на 2 байта (размер самой ссылки),
-			// независимо от того, насколько длинное имя, на которое она указывает.
 			if (!jumped) {
 				stop_offset = current + 2;
 				jumped = true;
@@ -57,22 +55,18 @@ std::string parse_dns_name(const uint8_t* packet, size_t& offset, size_t max_len
 
 			uint16_t ptr = ((len & 0x3F) << 8) | packet[current + 1];
 
-			// Прыгаем по ссылке
 			current = ptr;
 			hops++;
 			continue;
 		}
 
-		// 2. Конец имени
 		if (len == 0) {
-			// Если мы никуда не прыгали, то курсор в main должен встать сразу после этого нуля
 			if (!jumped) {
 				stop_offset = current + 1;
 			}
 			break;
 		}
 
-		// 3. Обычная метка
 		if (current + 1 + len > max_len) break;
 
 		if (!name.empty()) name += ".";
@@ -82,23 +76,52 @@ std::string parse_dns_name(const uint8_t* packet, size_t& offset, size_t max_len
 		current += 1 + len;
 	}
 
-	// Возвращаем обновленный offset
 	offset = stop_offset;
 
 	return name;
 }
 
-std::string itoh(unsigned int num) {
-	std::string temp = "";
-	while (num > 0) {
-		temp = resNum(num % 16) + temp;
-		num /= 16;
-	}
-	while (temp.size() != 2) temp = "0" + temp;
-	return temp;
-}
+struct {
+	std::string dns = "8.8.8.8";
+	int dns_port = 53;
+	std::string domain;
+} args;
 
-int main() {
+int main(int argc, char** argv) {
+	int position = 0;
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--dns") == 0) {
+			if (i + 1 >= argc) {
+				std::cerr << "DNS flag is here, but not specified. Fallback to 8.8.8.8:53";
+			}
+			else {
+				std::string tempdns = argv[i + 1];
+				if (std::regex_match(tempdns.data(), ip_port)) {
+					size_t splitter = tempdns.find(":");
+					args.dns = tempdns.substr(0, splitter);
+					args.dns_port = std::stoi(tempdns.substr(splitter + 1));
+				}
+				else if (std::regex_match(tempdns, ip_not_port)) {
+					std::cout << "DNS port is not specified. Using standard port 53";
+					args.dns = argv[i+1];
+				}
+				else {
+					std::cerr << "DNS input is invalid. Fallback to 8.8.8.8:53";
+				}
+				i++;
+				continue;
+			}
+		}
+		else if (argv[i][0] != '-') {
+			switch (position) {
+			case 0:
+				args.domain = argv[i];
+				break;
+			default: std::cerr << "Unknown positional argument: " << argv[i] << '\n';
+			}
+			position++;
+		}
+	}
 	setlocale(LC_ALL, "Russian");
 	WSADATA wsaData;
 	{
@@ -137,11 +160,9 @@ int main() {
 	uint16_t arcount = 0;	
 
 	std::vector<uint8_t> qname = {};
-	std::string domain;
-	std::cin >> domain;
-	size_t spl = domain.find(".");
-	std::string dom = domain.substr(0, spl);
-	std::string ras = domain.substr(spl + 1);
+	size_t spl = args.domain.find(".");
+	std::string dom = args.domain.substr(0, spl);
+	std::string ras = args.domain.substr(spl + 1);
 	qname.push_back(dom.size());
 	for (char c : dom) {
 		qname.push_back(c);
@@ -165,18 +186,13 @@ int main() {
 	memcpy(&packet[offset], qname.data(), qname.size()); offset += qname.size();
 	memcpy(&packet[offset], &qtype, 2); offset += 2;
 	memcpy(&packet[offset], &qclass, 2);
-	std::cout << "Сформировал запрос к DNS-серверу: ";
-	for (uint8_t i : packet) {
-		std::cout << itoh(i) << ' ';
-	}
-	std::cout << '\n';
 
+	std::cout << '\n';
 	struct sockaddr_in dns_server = {};
 	int dns_size = sizeof(dns_server);
-	inet_pton(AF_INET, "77.88.8.8", &(dns_server.sin_addr));
+	inet_pton(AF_INET, args.dns.c_str(), &(dns_server.sin_addr));
 	dns_server.sin_family = AF_INET;
-	dns_server.sin_port = htons(53);
-	
+	dns_server.sin_port = htons(args.dns_port);
 	{
 		int iResult = sendto(s, (const char*)packet.data(), packet.size(), 0, (sockaddr*)&dns_server, sizeof(dns_server));
 		if (iResult == -1) {
@@ -185,27 +201,22 @@ int main() {
 			WSACleanup();
 			return -1;
 		}
-		std::cout << "Отправил запрос (" << iResult << " bytes) на разрешение имени " << domain << " серверу 77.88.8.8:53...\n\n";
+		std::cout << "Sended " << iResult << " bytes to resolve the domain name " << args.domain << " to DNS " << args.dns << ":" << args.dns_port <<"...\n\n";
 	}
-	uint8_t response[BUF_SIZE];
+	uint8_t response[BUF_SIZE] = {};
 	int n = recvfrom(s, (char*)&response, BUF_SIZE - 1, 0, (sockaddr*)&dns_server, &dns_size);
-	std::cout << n;
 	if (n < 0) {
 		std::cerr << "Recvfrom error: " << WSAGetLastError();
 		closesocket(s);
 		WSACleanup();
 		return -1;
 	}
-	std::printf("Received (%d bytes): ", n);
-	for (int i = 0; i < n; i++) {
-		std::cout << itoh(response[i]) << ' ';
-	}
+	std::printf("Received %d bytes from %s:%d", n, args.dns.c_str(), args.dns_port);
 
 	// parsing
 
 	offset = 12;
 	std::string ans_qname = parse_dns_name(response, offset, n);
-	std::cout << "After ans_qname: " << offset << "\n";
 	offset += 4;
 	std::string ans_name = parse_dns_name(response, offset, n);
 	if (offset + 10 > sizeof(response)) {
@@ -214,24 +225,19 @@ int main() {
 	}
 	
 	uint16_t type_net, type;
-	std::cout << "Before memcpy type_net" << offset << "\n";
 	memcpy(&type_net, &response[offset], 2); offset += 2; type = ntohs(type_net);
 	uint16_t dns_class_net, dns_class;
-	std::cout << "Before memcpy dns_class_net" << offset << "\n";
 	memcpy(&dns_class_net, &response[offset], 2); offset += 2; dns_class = ntohs(dns_class_net);
-	std::cout << "Before ttl_net" << offset << "\n";
 	uint32_t ttl_net, ttl;
 	memcpy(&ttl_net, &response[offset], 4); offset += 4; ttl = ntohl(ttl_net);
-	std::cout << "Before rdlen" << offset << "\n";
 	uint16_t rdlen_net, rdlen;
 	memcpy(&rdlen_net, &response[offset], 2); offset += 2; rdlen = ntohs(rdlen_net);
 	std::stringstream info;
-	info << "Response\n===============\nType: " << (type == 1 ? "A" : std::to_string(type)) << "\nClass: " << (dns_class == 0x0001 ? "IN" : "Unknown")
+	info << "\n\nResponse\n===============\nName: " << ans_name << "\nType: " << dns_types.at(type) << "\nClass : " << (dns_class == 0x0001 ? "IN" : "Unknown")
 		<< "\nTTL: " << ttl << "\nRD Length: " << rdlen << "\nIP-address: ";
 	switch (type) {
 	case (0x01):
 		{
-		std::cout << "вычисляем ip: " << offset << "\n";
 		info << (int)response[offset] << "."
 		<< (int)response[offset+1] << "."
 		<< (int)response[offset+2] << "."
