@@ -1,15 +1,26 @@
 ﻿#include <iostream>
 #include <cstdint>
 #include <vector>
+#include <cstdio>
 #include <map>
 #include <WinSock2.h>
 #include <sstream>
+#include <string>
+#include <string_view>
 #include <WS2tcpip.h>
 #include <regex>
 #pragma comment(lib, "Ws2_32.lib")
+
+using std::string;
+using std::cout;
+using std::cerr;
+using std::stringstream;	
+using std::map;
+using std::string_view;
+
 constexpr int BUF_SIZE = 1024;
 
-const std::map <uint8_t, char> m = {
+const map <uint8_t, char> m = {
 	{10, 'A'},
 	{11, 'B'},
 	{12, 'C'},
@@ -18,7 +29,7 @@ const std::map <uint8_t, char> m = {
 	{15, 'F'}
 };
 
-const std::map <uint16_t, std::string> dns_types = {
+const map <uint16_t, string> dns_types = {
 	{0x0001, "A"},
 	{0x001C, "AAAA"},
 	{0x0005, "CNAME"},
@@ -31,10 +42,34 @@ char static resNum(unsigned int num) {
 	else return m.at(num);
 }
 
+string make_help_screen() {
+	size_t margin_arg = 4;
+	size_t gap_arg_desc = 8;
+	const char label[] = "Creates a request to the DNS server to resolve the specified domain name";
+	const char syntax[] = "xlookup domain_name [-d dns_address[:dns_port] | [--dns dns_address[:dns_port]]] [-h | --help]";
+	map <string_view, string_view> args = {
+		{"domain_name","domain name for resolving (e.g. example.com)"},
+		{"-d,--dns ADDR[:PORT]", "Specify custom DNS address (default: 8.8.8.8:53)"},
+		{"-h, --help", "Prints this help message"}
+	};
+	size_t maxmargin = 0;
+	for (const auto& [arg, desc] : args)
+		maxmargin = max(arg.size(), maxmargin);
+	stringstream message;
+	message << label << "\r\n\r\n" << syntax << "\r\n\r\n";
+	for (const auto& [arg, desc] : args) {
+		message << string(margin_arg, ' ')
+		<< arg
+		<< string(gap_arg_desc + maxmargin - arg.size(), ' ')
+		<< desc << "\r\n";
+	}
+	return message.str();
+}
+
 std::regex ip_port("^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-3][0-5])$");
 std::regex ip_not_port("^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$");
-std::string static parse_dns_name(const uint8_t* packet, size_t& offset, size_t max_len) {
-	std::string name;
+string static parse_dns_name(const uint8_t* packet, size_t& offset, size_t max_len) {
+	string name;
 	size_t current = offset;
 	bool jumped = false;
 	size_t stop_offset = 0; 
@@ -82,9 +117,9 @@ std::string static parse_dns_name(const uint8_t* packet, size_t& offset, size_t 
 }
 
 struct {
-	std::string dns = "8.8.8.8";
+	string dns = "8.8.8.8";
 	int dns_port = 53;
-	std::string domain;
+	string domain;
 } args;
 
 int main(int argc, char** argv) {
@@ -92,32 +127,37 @@ int main(int argc, char** argv) {
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--dns") == 0) {
 			if (i + 1 >= argc) {
-				std::cerr << "DNS flag is here, but not specified. Fallback to 8.8.8.8:53";
+				cout << "DNS flag is here, but not specified. Fallback to 8.8.8.8:53";
 			}
 			else {
-				std::string tempdns = argv[i + 1];
+				string tempdns = argv[i + 1];
 				if (std::regex_match(tempdns.data(), ip_port)) {
 					size_t splitter = tempdns.find(":");
 					args.dns = tempdns.substr(0, splitter);
 					args.dns_port = std::stoi(tempdns.substr(splitter + 1));
 				}
 				else if (std::regex_match(tempdns, ip_not_port)) {
-					std::cout << "DNS port is not specified. Using standard port 53";
+					cout << "DNS port is not specified. Using standard port " << args.dns_port;
 					args.dns = argv[i+1];
 				}
 				else {
-					std::cerr << "DNS input is invalid. Fallback to 8.8.8.8:53";
+					cout << "DNS input is invalid. Fallback to " << args.dns << ':' << args.dns_port;
 				}
 				i++;
 				continue;
 			}
+		}
+		else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+
+			cout << make_help_screen();
+			return 0;
 		}
 		else if (argv[i][0] != '-') {
 			switch (position) {
 			case 0:
 				args.domain = argv[i];
 				break;
-			default: std::cerr << "Unknown positional argument: " << argv[i] << '\n';
+			default: cout << "Unknown positional argument: " << argv[i] << '\n';
 			}
 			position++;
 		}
@@ -125,16 +165,16 @@ int main(int argc, char** argv) {
 	setlocale(LC_ALL, "Russian");
 	WSADATA wsaData;
 	{
-		int iResult = WSAStartup(0x202, &wsaData);
+		int iResult = WSAStartup(MAKEWORD(2,2), &wsaData);
 		if (iResult) {
-			std::cerr << "Startup error: " << iResult;
+			cout << "Startup error: " << iResult;
 			return -1;
 		}
 	}
 	SOCKET s;
 	s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (s == INVALID_SOCKET) {
-		std::cerr << "Socket init error: " << WSAGetLastError();
+		cout << "Socket init error: " << WSAGetLastError();
 		WSACleanup();
 		return -1;
 	}
@@ -145,7 +185,7 @@ int main(int argc, char** argv) {
 	{
 		int iResult = bind(s, (const sockaddr*)&local_sai, sizeof(local_sai));
 		if (iResult) {
-			std::cerr << "bind error: " << iResult;
+			cout << "bind error: " << iResult;
 			closesocket(s);
 			WSACleanup();
 			return -1;
@@ -161,8 +201,8 @@ int main(int argc, char** argv) {
 
 	std::vector<uint8_t> qname = {};
 	size_t spl = args.domain.find(".");
-	std::string dom = args.domain.substr(0, spl);
-	std::string ras = args.domain.substr(spl + 1);
+	string dom = args.domain.substr(0, spl);
+	string ras = args.domain.substr(spl + 1);
 	qname.push_back(dom.size());
 	for (char c : dom) {
 		qname.push_back(c);
@@ -187,7 +227,7 @@ int main(int argc, char** argv) {
 	memcpy(&packet[offset], &qtype, 2); offset += 2;
 	memcpy(&packet[offset], &qclass, 2);
 
-	std::cout << '\n';
+	cout << '\n';
 	struct sockaddr_in dns_server = {};
 	int dns_size = sizeof(dns_server);
 	inet_pton(AF_INET, args.dns.c_str(), &(dns_server.sin_addr));
@@ -196,17 +236,17 @@ int main(int argc, char** argv) {
 	{
 		int iResult = sendto(s, (const char*)packet.data(), packet.size(), 0, (sockaddr*)&dns_server, sizeof(dns_server));
 		if (iResult == -1) {
-			std::cerr << "sendto error: " << WSAGetLastError();
+			cout << "sendto error: " << WSAGetLastError();
 			closesocket(s);
 			WSACleanup();
 			return -1;
 		}
-		std::cout << "Sended " << iResult << " bytes to resolve the domain name " << args.domain << " to DNS " << args.dns << ":" << args.dns_port <<"...\n\n";
+		cout << "Sended " << iResult << " bytes to resolve the domain name " << args.domain << " to DNS " << args.dns << ":" << args.dns_port <<"...\n\n";
 	}
 	uint8_t response[BUF_SIZE] = {};
 	int n = recvfrom(s, (char*)&response, BUF_SIZE - 1, 0, (sockaddr*)&dns_server, &dns_size);
 	if (n < 0) {
-		std::cerr << "Recvfrom error: " << WSAGetLastError();
+		cout << "Recvfrom error: " << WSAGetLastError();
 		closesocket(s);
 		WSACleanup();
 		return -1;
@@ -216,11 +256,11 @@ int main(int argc, char** argv) {
 	// parsing
 
 	offset = 12;
-	std::string ans_qname = parse_dns_name(response, offset, n);
+	string ans_qname = parse_dns_name(response, offset, n);
 	offset += 4;
-	std::string ans_name = parse_dns_name(response, offset, n);
+	string ans_name = parse_dns_name(response, offset, n);
 	if (offset + 10 > sizeof(response)) {
-		std::cerr << "not enough data to parse\n";
+		cout << "not enough data to parse\n";
 		return -1;
 	}
 	
@@ -232,7 +272,7 @@ int main(int argc, char** argv) {
 	memcpy(&ttl_net, &response[offset], 4); offset += 4; ttl = ntohl(ttl_net);
 	uint16_t rdlen_net, rdlen;
 	memcpy(&rdlen_net, &response[offset], 2); offset += 2; rdlen = ntohs(rdlen_net);
-	std::stringstream info;
+	stringstream info;
 	info << "\n\nResponse\n===============\nName: " << ans_name << "\nType: " << dns_types.at(type) << "\nClass : " << (dns_class == 0x0001 ? "IN" : "Unknown")
 		<< "\nTTL: " << ttl << "\nRD Length: " << rdlen << "\nIP-address: ";
 	switch (type) {
@@ -247,7 +287,7 @@ int main(int argc, char** argv) {
 	default:
 		info << "Unknown";
 	}
-	std::cout << info.str();
+	cout << info.str();
 	closesocket(s);
 	WSACleanup();
 	return 0;
