@@ -1,4 +1,4 @@
-# xlookup (nslookup analogue) *by xromza* #
+# xlookup (nslookup analog) *by xromza* #
 CLI tool. Creates a request to the DNS server to resolve the specified domain name
 ## How to use? ##
 ### Syntax ### 
