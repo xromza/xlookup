@@ -1,4 +1,9 @@
-﻿#include <iostream>
+/*
+ * xlookup.cpp | Microsoft nslookup analog
+ * Copyright © xromza 2025
+*/
+
+#include <iostream>
 #include <cstdint>
 #include <vector>
 #include <cstdio>
