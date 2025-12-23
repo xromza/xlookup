@@ -8,13 +8,25 @@
 #include <vector>
 #include <cstdio>
 #include <map>
-#include <WinSock2.h>
 #include <sstream>
 #include <string>
+#include <string.h>
 #include <string_view>
-#include <WS2tcpip.h>
 #include <regex>
+#include <cmath>
+#ifdef _WIN32
+#include <WinSock2.h>
+constexpr const char locale[] = "Russian";
+#include <WS2tcpip.h>
 #pragma comment(lib, "Ws2_32.lib")
+#else
+#include <sys/socket.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <netinet/ip.h>
+constexpr const char locale[] = "ru_RU";
+typedef int SOCKET;
+#endif
 
 using std::string;
 using std::cout;
@@ -24,6 +36,28 @@ using std::map;
 using std::string_view;
 
 constexpr int BUF_SIZE = 1024;
+
+void printError(const char *msg) {
+	#ifdef _WIN32
+		cerr << msg <<  WSAGetLastError() << '\n';
+	#else
+		std::perror(msg);
+	#endif
+}
+void cleanup() {
+	#ifdef _WIN32
+		WSACleanup();
+	#endif
+}
+void cleanup(SOCKET s) {
+	#ifdef _WIN32
+		closesocket(s);
+	#else
+		close(s);
+	#endif
+	cleanup();
+}
+
 
 const map <uint8_t, char> m = {
 	{10, 'A'},
@@ -59,7 +93,7 @@ string make_help_screen() {
 	};
 	size_t maxmargin = 0;
 	for (const auto& [arg, desc] : args)
-		maxmargin = max(arg.size(), maxmargin);
+		maxmargin = std::max(arg.size(), maxmargin);
 	stringstream message;
 	message << label << "\r\n\r\n" << syntax << "\r\n\r\n";
 	for (const auto& [arg, desc] : args) {
@@ -71,8 +105,8 @@ string make_help_screen() {
 	return message.str();
 }
 
-std::regex ip_port("^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-3][0-5])$");
-std::regex ip_not_port("^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$");
+std::regex ip_port("^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-3][0-5])$");
+std::regex ip_not_port("^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$");
 string static parse_dns_name(const uint8_t* packet, size_t& offset, size_t max_len) {
 	string name;
 	size_t current = offset;
@@ -166,8 +200,17 @@ int main(int argc, char** argv) {
 			}
 			position++;
 		}
+		if (position == 0) {
+			cout << "Not enought arguments: domain";
+			return -1;
+		}
 	}
-	setlocale(LC_ALL, "Russian");
+	if (args.domain.empty()) {
+		cerr << "Not enough arguments: domain\r\n";
+		return -1;
+	}
+	setlocale(LC_ALL, locale);
+	#ifdef _WIN32
 	WSADATA wsaData;
 	{
 		int iResult = WSAStartup(MAKEWORD(2,2), &wsaData);
@@ -176,11 +219,12 @@ int main(int argc, char** argv) {
 			return -1;
 		}
 	}
+	#endif
 	SOCKET s;
 	s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-	if (s == INVALID_SOCKET) {
-		cout << "Socket init error: " << WSAGetLastError();
-		WSACleanup();
+	if (s == -1) {
+		printError("Socket init error: ");
+		cleanup();
 		return -1;
 	}
 	struct sockaddr_in local_sai = {};
@@ -191,8 +235,7 @@ int main(int argc, char** argv) {
 		int iResult = bind(s, (const sockaddr*)&local_sai, sizeof(local_sai));
 		if (iResult) {
 			cout << "bind error: " << iResult;
-			closesocket(s);
-			WSACleanup();
+			cleanup(s);
 			return -1;
 		}
 	}
@@ -241,19 +284,17 @@ int main(int argc, char** argv) {
 	{
 		int iResult = sendto(s, (const char*)packet.data(), packet.size(), 0, (sockaddr*)&dns_server, sizeof(dns_server));
 		if (iResult == -1) {
-			cout << "sendto error: " << WSAGetLastError();
-			closesocket(s);
-			WSACleanup();
+			printError("Sendto() error: ");
+			cleanup(s);
 			return -1;
 		}
 		cout << "Sended " << iResult << " bytes to resolve the domain name " << args.domain << " to DNS " << args.dns << ":" << args.dns_port <<"...\n\n";
 	}
 	uint8_t response[BUF_SIZE] = {};
-	int n = recvfrom(s, (char*)&response, BUF_SIZE - 1, 0, (sockaddr*)&dns_server, &dns_size);
+	int n = recvfrom(s, (char*)&response, BUF_SIZE - 1, 0, (sockaddr*)&dns_server, (unsigned int*) &dns_size);
 	if (n < 0) {
-		cout << "Recvfrom error: " << WSAGetLastError();
-		closesocket(s);
-		WSACleanup();
+		printError("recvfrom() error: ");
+		cleanup(s);
 		return -1;
 	}
 	std::printf("Received %d bytes from %s:%d", n, args.dns.c_str(), args.dns_port);
@@ -269,6 +310,7 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 	
+
 	uint16_t type_net, type;
 	memcpy(&type_net, &response[offset], 2); offset += 2; type = ntohs(type_net);
 	uint16_t dns_class_net, dns_class;
@@ -292,8 +334,7 @@ int main(int argc, char** argv) {
 	default:
 		info << "Unknown";
 	}
-	cout << info.str();
-	closesocket(s);
-	WSACleanup();
+	cout << info.str() << "\r\n\r\n";
+	cleanup(s);
 	return 0;
 }
