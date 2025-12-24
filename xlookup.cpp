@@ -13,6 +13,8 @@
 #include <string.h>
 #include <string_view>
 #include <regex>
+#include <algorithm>
+#include <vector>
 #include <cmath>
 #ifdef _WIN32
 #include <WinSock2.h>
@@ -30,16 +32,34 @@ typedef int SOCKET;
 
 using std::cerr;
 using std::cout;
+using std::pair;
 using std::map;
 using std::string;
 using std::string_view;
 using std::stringstream;
+using std::vector;
 
 #include <iostream>
 #include <iomanip>
 #include <cstdint>
 
 constexpr int BUF_SIZE = 1024;
+
+void printHex(const uint8_t *data, size_t size)
+{
+	std::ios_base::fmtflags originalFlags = std::cout.flags(); // сохраняем флаги потока
+
+	for (size_t i = 0; i < size; ++i)
+	{
+		if (i > 0)
+			std::cout << ' ';
+		std::cout << std::uppercase << std::setfill('0') << std::setw(2) << std::hex
+				  << static_cast<int>(data[i]);
+	}
+	std::cout << std::dec << std::endl; // возвращаем в десятичный режим и новая строка
+
+	std::cout.flags(originalFlags); // восстанавливаем исходные флаги (опционально, но аккуратно)
+}
 
 void printError(const char *msg)
 {
@@ -65,13 +85,14 @@ void cleanup(SOCKET s)
 	cleanup();
 }
 
-const map<uint8_t, char> m = {
-	{10, 'A'},
-	{11, 'B'},
-	{12, 'C'},
-	{13, 'D'},
-	{14, 'E'},
-	{15, 'F'}};
+enum DNS_TYPES
+{
+	A = 0x0001,
+	AAAA = 0x001C,
+	CNAME = 0x0005,
+	MX = 0x000F,
+	NS = 0x0002
+};
 
 const map<uint16_t, string> dns_types = {
 	{0x0001, "A"},
@@ -79,7 +100,12 @@ const map<uint16_t, string> dns_types = {
 	{0x0005, "CNAME"},
 	{0x000F, "MX"},
 	{0x0002, "NS"}};
-
+const map<string, uint16_t> input_dns_types = {
+	{"A", 0x0001},
+	{"AAAA", 0x001C},
+	{"CNAME", 0x0005},
+	{"MX", 0x000F},
+	{"NS", 0x0002}};
 const map<uint8_t, string> rCode_values = {
 	{0x00, "No error"},
 	{0x01, "Format error"},
@@ -88,12 +114,49 @@ const map<uint8_t, string> rCode_values = {
 	{0x04, "Not implemented"},
 	{0x05, "Refused"}};
 
-char static resNum(unsigned int num)
+vector<string> ipv4s;
+vector<string> cnames;
+vector<pair<uint16_t, string>> mxs;
+
+void printAll(bool &AA, string &ans_qname, uint16_t &type, uint16_t &dns_class, uint32_t &ttl, uint16_t &rdlen, uint16_t &ANCOUNT)
 {
-	if (num < 10)
-		return '0' + num;
-	else
-		return m.at(num);
+	stringstream info;
+	info << "\n\n"
+		 << ((AA) ? ("Authoritative") : ("Non-authoritative")) << " response\n===============" << "\nName:       " << ans_qname << "\nClass:      " << (dns_class == 0x0001 ? "IN" : "Unknown")
+		 << "\nTTL:        " << ttl << "\nRD Length:  " << rdlen << "\nANCOUNT:    " << ANCOUNT << "\n\n";
+
+	if (!cnames.empty())
+	{
+		info << "Canonical names: \n\n"
+			 << ans_qname << " -> " << cnames[0] << '\n';
+		for (vector<string>::iterator i = cnames.begin() + 1; i < cnames.end(); i++)
+		{
+			info << *(i - 1) << " -> " << *i << '\n';
+		}
+		info << '\n';
+	}
+	if (!mxs.empty())
+	{
+		std::sort(mxs.begin(), mxs.end());
+		info << "Mail Exchange: \n\n"
+		<< "Priority " << " Host\n";
+		for (auto& [priority, mail] : mxs) {
+			string priorityStr = std::to_string(priority);
+			priorityStr.resize(10, ' ');
+			info << priorityStr << mail << '\n';
+		}
+		info << '\n';
+	}
+	if (!ipv4s.empty())
+	{
+		info << "IPv4 addresses" << (cnames.empty() ? "" : " for " + cnames.back()) << ": \n\n";
+		for (auto &ip : ipv4s)
+		{
+			info << ip << '\n';
+		}
+		info << '\n';
+	}
+	cout << info.str() << '\n';
 }
 
 string make_help_screen()
@@ -129,7 +192,7 @@ string static parse_dns_name(const uint8_t *packet, size_t &offset, size_t max_l
 	string name;
 	size_t current = offset;
 	bool jumped = false;
-	size_t stop_offset = 0;
+	size_t stop_offset = offset;
 	int hops = 0;
 
 	while (hops < 5)
@@ -188,6 +251,7 @@ struct
 	string dns = "8.8.8.8";
 	int dns_port = 53;
 	string domain;
+	uint16_t type = A;
 } args;
 
 int main(int argc, char **argv)
@@ -195,12 +259,11 @@ int main(int argc, char **argv)
 	int position = 0;
 	for (int i = 1; i < argc; i++)
 	{
-		if (strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--dns") == 0)
+		string_view arg(argv[i]);
+		if (arg == "-d" || arg == "--dns")
 		{
 			if (i + 1 >= argc)
-			{
-				cout << "DNS flag is here, but not specified. Fallback to 8.8.8.8:53";
-			}
+				cerr << "\"--dns\" flag is here, but not specified. Fallback to 8.8.8.8:53";
 			else
 			{
 				string tempdns = argv[i + 1];
@@ -209,25 +272,48 @@ int main(int argc, char **argv)
 					size_t splitter = tempdns.find(":");
 					args.dns = tempdns.substr(0, splitter);
 					args.dns_port = std::stoi(tempdns.substr(splitter + 1));
+					i++;
 				}
 				else if (std::regex_match(tempdns, ip_not_port))
 				{
-					cout << "DNS port is not specified. Using standard port " << args.dns_port;
+					cout << "DNS port is not specified. Using standard port " << args.dns_port << '\n';
 					args.dns = argv[i + 1];
+					i++;
 				}
 				else
 				{
-					cout << "DNS input is invalid. Fallback to " << args.dns << ':' << args.dns_port;
+					cout << "DNS input is invalid. Fallback to " << args.dns << ':' << args.dns_port << '\n';
 				}
-				i++;
+
 				continue;
 			}
 		}
-		else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0)
+		else if (arg == "-h" || arg == "--help")
 		{
-
-			cout << make_help_screen();
+			cout << make_help_screen() << '\n';
 			return 0;
+		}
+		else if (arg == "-t" || arg == "--type")
+		{
+			if (i + 1 >= argc)
+			{
+				cerr << "\"--type\" flag is here, but not specified. Fallback to A type\n";
+			}
+			else
+			{
+				string type = argv[i + 1];
+				if (input_dns_types.find(type) == input_dns_types.end())
+				{
+					cerr << "Specified unknown DNS type \"" << type << "\". Fallback to A type\n";
+					i++;
+				}
+				else
+				{
+					args.type = input_dns_types.at(type);
+					i++;
+				}
+				cout << args.type;
+			}
 		}
 		else if (argv[i][0] != '-')
 		{
@@ -241,15 +327,19 @@ int main(int argc, char **argv)
 			}
 			position++;
 		}
-		if (position == 0)
+		else
 		{
-			cout << "Not enought arguments: domain";
-			return -1;
+			cerr << "Unknown flag \"" << argv[i] << "\" Use xlookup -h or xlookup --help for help. Skipping..." << '\n';
 		}
+	}
+	if (position == 0)
+	{
+		cout << "Not enough arguments: domain_name2@\n";
+		return -1;
 	}
 	if (args.domain.empty())
 	{
-		cerr << "Not enough arguments: domain\r\n";
+		cerr << "Not enough arguments: domain_name2!\r\n";
 		return -1;
 	}
 	setlocale(LC_ALL, locale);
@@ -285,7 +375,6 @@ int main(int argc, char **argv)
 			return -1;
 		}
 	}
-
 	uint16_t id = htons(static_cast<uint16_t>(rand()));
 	uint16_t flags = htons(0x0100);
 	uint16_t qdcount = htons(1);
@@ -312,7 +401,8 @@ int main(int argc, char **argv)
 		qname.push_back(c);
 	}
 	qname.push_back(0);
-	uint16_t qtype = htons(0x01);
+	cout << "args.type = " << args.type;
+	uint16_t qtype = htons(args.type);
 	uint16_t qclass = htons(0x01);
 
 	std::vector<uint8_t> packet;
@@ -377,62 +467,77 @@ int main(int argc, char **argv)
 	}
 	bool AA = (flags_resp & 0x400) != 0;
 	offset += 4;
+	printHex(response, n);
 	uint16_t ANCOUNT_net, ANCOUNT_resp;
-	memcpy(&ANCOUNT_net, &response[offset], 2);
+	memcpy(&ANCOUNT_net, &response[6], 2);
 	ANCOUNT_resp = ntohs(ANCOUNT_net);
 	offset += 6;
 	string ans_qname = parse_dns_name(response, offset, n);
 	offset += 4;
 	stringstream info;
-	bool isUsed = false;
-	int ttl, rdlen;
+	string ans_name;
+	uint16_t type, dns_class, rdlen;
+	uint32_t ttl;
 	for (int i = 0; i < ANCOUNT_resp; i++)
 	{
-		string ans_name = parse_dns_name(response, offset, n);
+		ans_name = parse_dns_name(response, offset, n);
 		if (offset + 10 > sizeof(response))
 		{
 			cout << "not enough data to parse\n";
 			return -1;
 		}
-		uint16_t type_net, type;
+		uint16_t type_net;
 		memcpy(&type_net, &response[offset], 2);
 		offset += 2;
 		type = ntohs(type_net);
-		uint16_t dns_class_net, dns_class;
+		uint16_t dns_class_net;
 		memcpy(&dns_class_net, &response[offset], 2);
 		offset += 2;
 		dns_class = ntohs(dns_class_net);
-		uint32_t ttl_net, ttl;
+		uint32_t ttl_net;
 		memcpy(&ttl_net, &response[offset], 4);
 		offset += 4;
 		ttl = ntohl(ttl_net);
-		uint16_t rdlen_net, rdlen;
+		uint16_t rdlen_net;
 		memcpy(&rdlen_net, &response[offset], 2);
 		offset += 2;
 		rdlen = ntohs(rdlen_net);
-		if (!isUsed)
-		{
-			info << "\n\n"
-				 << ((AA) ? ("Authorative") : ("Non-authorative")) << " response\n===============" << "\nName:       " << ans_qname << "\nType:       " << dns_types.at(type) << "\nClass:      " << (dns_class == 0x0001 ? "IN" : "Unknown")
-				 << "\nTTL:        " << ttl << "\nRD Length:  " << rdlen << "\nANCOUNT:    " << ANCOUNT_resp << "\nIPv4 Addresses:\n\n";
-			isUsed = true;
-		}
 		switch (type)
 		{
-		case (0x01):
+		case (A):
 		{
-			info << i + 1 << ". " << (int)response[offset] << "."
+			stringstream ipv4;
+
+			ipv4 << (int)response[offset] << "."
 				 << (int)response[offset + 1] << "."
 				 << (int)response[offset + 2] << "."
-				 << (int)response[offset + 3] << '\n';
+				 << (int)response[offset + 3];
+			ipv4s.push_back(ipv4.str());
 			offset += 4;
 			break;
 		}
+		case (CNAME):
+		{
+			cnames.push_back(parse_dns_name(response, offset, n));
+			break;
+		}
+		case (MX): {
+			if (rdlen < 2) {
+				offset += rdlen;
+				break;
+			}
+			uint16_t priority = ntohs(*(uint16_t*) &response[offset]);
+			offset += 2;
+			std::pair<uint16_t, string> mail_server = std::make_pair(priority, parse_dns_name(response,offset,n));
+			mxs.push_back(mail_server);
+			break;
+		}
 		default:
-			info << "Unknown";
+			info << "Unknown type \"" << type << "\"\n";
+			offset += rdlen;
 		}
 	}
-	cout << info.str() << "\r\n";
+	printAll(AA, ans_qname, type, dns_class, ttl, rdlen, ANCOUNT_resp);
 	cleanup(s);
 	return 0;
 }
