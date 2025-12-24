@@ -71,16 +71,14 @@ const map<uint8_t, char> m = {
 	{12, 'C'},
 	{13, 'D'},
 	{14, 'E'},
-	{15, 'F'}
-};
+	{15, 'F'}};
 
 const map<uint16_t, string> dns_types = {
 	{0x0001, "A"},
 	{0x001C, "AAAA"},
 	{0x0005, "CNAME"},
 	{0x000F, "MX"},
-	{0x0002, "NS"}
-};
+	{0x0002, "NS"}};
 
 const map<uint8_t, string> rCode_values = {
 	{0x00, "No error"},
@@ -88,8 +86,7 @@ const map<uint8_t, string> rCode_values = {
 	{0x02, "Server failure"},
 	{0x03, "NXDOMAIN Name error"},
 	{0x04, "Not implemented"},
-	{0x05, "Refused"}
-};
+	{0x05, "Refused"}};
 
 char static resNum(unsigned int num)
 {
@@ -355,7 +352,6 @@ int main(int argc, char **argv)
 			return -1;
 		}
 		cout << "Sended " << iResult << " bytes to resolve the domain name " << args.domain << " to DNS " << args.dns << ":" << args.dns_port << "...\n\n";
-
 	}
 	uint8_t response[BUF_SIZE] = {};
 	int n = recvfrom(s, (char *)&response, BUF_SIZE - 1, 0, (sockaddr *)&dns_server, (unsigned int *)&dns_size);
@@ -370,56 +366,73 @@ int main(int argc, char **argv)
 	// parsing
 	offset = 2;
 	uint16_t flags_net, flags_resp;
-	memcpy(&flags_net, &response[offset], 2); flags_resp = ntohs(flags_net);
+	memcpy(&flags_net, &response[offset], 2);
+	flags_resp = ntohs(flags_net);
 	uint8_t rCode = flags_resp & 0xF;
-	if (rCode != 0x00) {
-		cerr << "Error: " << rCode_values.at(rCode) << "\r\n\r\n"; 
+	if (rCode != 0x00)
+	{
+		cerr << "Error: " << rCode_values.at(rCode) << "\r\n\r\n";
 		cleanup(s);
 		return -1;
 	}
-	offset += 10;
+	bool AA = (flags_resp & 0x400) != 0;
+	offset += 4;
+	uint16_t ANCOUNT_net, ANCOUNT_resp;
+	memcpy(&ANCOUNT_net, &response[offset], 2);
+	ANCOUNT_resp = ntohs(ANCOUNT_net);
+	offset += 6;
 	string ans_qname = parse_dns_name(response, offset, n);
 	offset += 4;
-	string ans_name = parse_dns_name(response, offset, n);
-	if (offset + 10 > sizeof(response))
-	{
-		cout << "not enough data to parse\n";
-		return -1;
-	}
-	uint16_t type_net, type;
-	memcpy(&type_net, &response[offset], 2);
-	offset += 2;
-	type = ntohs(type_net);
-	uint16_t dns_class_net, dns_class;
-	memcpy(&dns_class_net, &response[offset], 2);
-	offset += 2;
-	dns_class = ntohs(dns_class_net);
-	uint32_t ttl_net, ttl;
-	memcpy(&ttl_net, &response[offset], 4);
-	offset += 4;
-	ttl = ntohl(ttl_net);
-	uint16_t rdlen_net, rdlen;
-	memcpy(&rdlen_net, &response[offset], 2);
-	offset += 2;
-	rdlen = ntohs(rdlen_net);
 	stringstream info;
-	
-	info << "\n\nResponse\n===============" << "\nName:       " << ans_name << "\nType:       " << dns_types.at(type) << "\nClass:      " << (dns_class == 0x0001 ? "IN" : "Unknown")
-		 << "\nTTL:        " << ttl << "\nRD Length:  " << rdlen << "\nIP-address: ";
-	switch (type)
+	bool isUsed = false;
+	int ttl, rdlen;
+	for (int i = 0; i < ANCOUNT_resp; i++)
 	{
-	case (0x01):
-	{
-		info << (int)response[offset] << "."
-			 << (int)response[offset + 1] << "."
-			 << (int)response[offset + 2] << "."
-			 << (int)response[offset + 3];
-		break;
+		string ans_name = parse_dns_name(response, offset, n);
+		if (offset + 10 > sizeof(response))
+		{
+			cout << "not enough data to parse\n";
+			return -1;
+		}
+		uint16_t type_net, type;
+		memcpy(&type_net, &response[offset], 2);
+		offset += 2;
+		type = ntohs(type_net);
+		uint16_t dns_class_net, dns_class;
+		memcpy(&dns_class_net, &response[offset], 2);
+		offset += 2;
+		dns_class = ntohs(dns_class_net);
+		uint32_t ttl_net, ttl;
+		memcpy(&ttl_net, &response[offset], 4);
+		offset += 4;
+		ttl = ntohl(ttl_net);
+		uint16_t rdlen_net, rdlen;
+		memcpy(&rdlen_net, &response[offset], 2);
+		offset += 2;
+		rdlen = ntohs(rdlen_net);
+		if (!isUsed)
+		{
+			info << "\n\n"
+				 << ((AA) ? ("Authorative") : ("Non-authorative")) << " response\n===============" << "\nName:       " << ans_qname << "\nType:       " << dns_types.at(type) << "\nClass:      " << (dns_class == 0x0001 ? "IN" : "Unknown")
+				 << "\nTTL:        " << ttl << "\nRD Length:  " << rdlen << "\nANCOUNT:    " << ANCOUNT_resp << "\nIPv4 Addresses:\n\n";
+			isUsed = true;
+		}
+		switch (type)
+		{
+		case (0x01):
+		{
+			info << i + 1 << ". " << (int)response[offset] << "."
+				 << (int)response[offset + 1] << "."
+				 << (int)response[offset + 2] << "."
+				 << (int)response[offset + 3] << '\n';
+			offset += 4;
+			break;
+		}
+		default:
+			info << "Unknown";
+		}
 	}
-	default:
-		info << "Unknown";
-	}
-	cout << info.str() << "\r\n\r\n";
+	cout << info.str() << "\r\n";
 	cleanup(s);
 	return 0;
 }
