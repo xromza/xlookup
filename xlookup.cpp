@@ -39,29 +39,6 @@ using std::stringstream;
 #include <iomanip>
 #include <cstdint>
 
-template <typename T>
-void printHex(const T* data, size_t size) {
-    std::ios_base::fmtflags originalFlags = std::cout.flags(); // сохраняем флаги потока
-
-    for (size_t i = 0; i < size; ++i) {
-        if (i > 0) std::cout << ' ';
-        std::cout << std::uppercase << std::setfill('0') << std::setw(2) << std::hex
-                  << static_cast<int>(data[i]);
-    }
-    std::cout << std::dec << std::endl; // возвращаем в десятичный режим и новая строка
-
-    std::cout.flags(originalFlags); // восстанавливаем исходные флаги (опционально, но аккуратно)
-}
-template <typename T>
-void printHex(const T data) {
-    std::ios_base::fmtflags originalFlags = std::cout.flags(); // сохраняем флаги потока
-	cout << ' ';
-        std::cout << std::uppercase << std::setfill('0') << std::setw(2) << std::hex
-                  << static_cast<int>(data);
-    std::cout << std::dec << std::endl; // возвращаем в десятичный режим и новая строка
-
-    std::cout.flags(originalFlags); // восстанавливаем исходные флаги (опционально, но аккуратно)
-}
 constexpr int BUF_SIZE = 1024;
 
 void printError(const char *msg)
@@ -327,10 +304,7 @@ int main(int argc, char **argv)
 		string dom = args.domain.substr(spl_prev + 1, spl - spl_prev - 1);
 		qname.push_back(dom.size());
 		for (char c : dom)
-		{
 			qname.push_back(c);
-		}
-		cout << spl << dom << '\n';
 		spl_prev = spl;
 		spl = args.domain.find(".", spl + 1);
 	}
@@ -340,7 +314,6 @@ int main(int argc, char **argv)
 	{
 		qname.push_back(c);
 	}
-	cout << spl << dom << '\n';
 	qname.push_back(0);
 	uint16_t qtype = htons(0x01);
 	uint16_t qclass = htons(0x01);
@@ -430,8 +403,9 @@ int main(int argc, char **argv)
 	offset += 2;
 	rdlen = ntohs(rdlen_net);
 	stringstream info;
-	info << "\n\nResponse\n===============\nName: " << ans_name << "\nType: " << dns_types.at(type) << "\nClass : " << (dns_class == 0x0001 ? "IN" : "Unknown")
-		 << "\nTTL: " << ttl << "\nRD Length: " << rdlen << "\nIP-address: ";
+	
+	info << "\n\nResponse\n===============" << "\nName:       " << ans_name << "\nType:       " << dns_types.at(type) << "\nClass:      " << (dns_class == 0x0001 ? "IN" : "Unknown")
+		 << "\nTTL:        " << ttl << "\nRD Length:  " << rdlen << "\nIP-address: ";
 	switch (type)
 	{
 	case (0x01):
