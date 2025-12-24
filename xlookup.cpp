@@ -45,7 +45,7 @@ using std::vector;
 
 constexpr int BUF_SIZE = 1024;
 
-void printHex(const uint8_t *data, size_t size)
+void printHex(const uint8_t* data, size_t size)
 {
 	std::ios_base::fmtflags originalFlags = std::cout.flags(); // сохраняем флаги потока
 
@@ -54,14 +54,14 @@ void printHex(const uint8_t *data, size_t size)
 		if (i > 0)
 			std::cout << ' ';
 		std::cout << std::uppercase << std::setfill('0') << std::setw(2) << std::hex
-				  << static_cast<int>(data[i]);
+			<< static_cast<int>(data[i]);
 	}
 	std::cout << std::dec << std::endl; // возвращаем в десятичный режим и новая строка
 
 	std::cout.flags(originalFlags); // восстанавливаем исходные флаги (опционально, но аккуратно)
 }
 
-void printError(const char *msg)
+void printError(const char* msg)
 {
 #ifdef _WIN32
 	cerr << msg << WSAGetLastError() << '\n';
@@ -99,36 +99,36 @@ const map<uint16_t, string> dns_types = {
 	{0x001C, "AAAA"},
 	{0x0005, "CNAME"},
 	{0x000F, "MX"},
-	{0x0002, "NS"}};
+	{0x0002, "NS"} };
 const map<string, uint16_t> input_dns_types = {
 	{"A", 0x0001},
 	{"AAAA", 0x001C},
 	{"CNAME", 0x0005},
 	{"MX", 0x000F},
-	{"NS", 0x0002}};
+	{"NS", 0x0002} };
 const map<uint8_t, string> rCode_values = {
 	{0x00, "No error"},
 	{0x01, "Format error"},
 	{0x02, "Server failure"},
 	{0x03, "NXDOMAIN Name error"},
 	{0x04, "Not implemented"},
-	{0x05, "Refused"}};
+	{0x05, "Refused"} };
 
 vector<string> ipv4s;
 vector<string> cnames;
 vector<pair<uint16_t, string>> mxs;
 
-void printAll(bool &AA, string &ans_qname, uint16_t &type, uint16_t &dns_class, uint32_t &ttl, uint16_t &rdlen, uint16_t &ANCOUNT)
+void printAll(bool& AA, string& ans_qname, uint16_t& type, uint16_t& dns_class, uint32_t& ttl, uint16_t& rdlen, uint16_t& ANCOUNT)
 {
 	stringstream info;
 	info << "\n\n"
-		 << ((AA) ? ("Authoritative") : ("Non-authoritative")) << " response\n===============" << "\nName:       " << ans_qname << "\nClass:      " << (dns_class == 0x0001 ? "IN" : "Unknown")
-		 << "\nTTL:        " << ttl << "\nRD Length:  " << rdlen << "\nANCOUNT:    " << ANCOUNT << "\n\n";
+		<< ((AA) ? ("Authoritative") : ("Non-authoritative")) << " response\n===============" << "\nName:       " << ans_qname << "\nClass:      " << (dns_class == 0x0001 ? "IN" : "Unknown")
+		<< "\nTTL:        " << ttl << "\nRD Length:  " << rdlen << "\nANCOUNT:    " << ANCOUNT << "\n\n";
 
 	if (!cnames.empty())
 	{
 		info << "Canonical names: \n\n"
-			 << ans_qname << " -> " << cnames[0] << '\n';
+			<< ans_qname << " -> " << cnames[0] << '\n';
 		for (vector<string>::iterator i = cnames.begin() + 1; i < cnames.end(); i++)
 		{
 			info << *(i - 1) << " -> " << *i << '\n';
@@ -139,7 +139,7 @@ void printAll(bool &AA, string &ans_qname, uint16_t &type, uint16_t &dns_class, 
 	{
 		std::sort(mxs.begin(), mxs.end());
 		info << "Mail Exchange: \n\n"
-		<< "Priority " << " Host\n";
+			<< "Priority " << " Host\n";
 		for (auto& [priority, mail] : mxs) {
 			string priorityStr = std::to_string(priority);
 			priorityStr.resize(10, ' ');
@@ -150,7 +150,7 @@ void printAll(bool &AA, string &ans_qname, uint16_t &type, uint16_t &dns_class, 
 	if (!ipv4s.empty())
 	{
 		info << "IPv4 addresses" << (cnames.empty() ? "" : " for " + cnames.back()) << ": \n\n";
-		for (auto &ip : ipv4s)
+		for (auto& ip : ipv4s)
 		{
 			info << ip << '\n';
 		}
@@ -168,26 +168,26 @@ string make_help_screen()
 	map<string_view, string_view> args = {
 		{"domain_name", "domain name for resolving (e.g. example.com)"},
 		{"-d,--dns ADDR[:PORT]", "Specify custom DNS address (default: 8.8.8.8:53)"},
-		{"-h, --help", "Prints this help message"}};
+		{"-h, --help", "Prints this help message"} };
 	size_t maxmargin = 0;
-	for (const auto &[arg, desc] : args)
-		maxmargin = std::max(arg.size(), maxmargin);
+	for (const auto& [arg, desc] : args)
+		maxmargin = (((arg.size()) > (maxmargin)) ? (arg.size()) : (maxmargin));
 	stringstream message;
 	message << label << "\r\n\r\n"
-			<< syntax << "\r\n\r\n";
-	for (const auto &[arg, desc] : args)
+		<< syntax << "\r\n\r\n";
+	for (const auto& [arg, desc] : args)
 	{
 		message << string(margin_arg, ' ')
-				<< arg
-				<< string(gap_arg_desc + maxmargin - arg.size(), ' ')
-				<< desc << "\r\n";
+			<< arg
+			<< string(gap_arg_desc + maxmargin - arg.size(), ' ')
+			<< desc << "\r\n";
 	}
 	return message.str();
 }
 
 std::regex ip_port("^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-3][0-5])$");
 std::regex ip_not_port("^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$");
-string static parse_dns_name(const uint8_t *packet, size_t &offset, size_t max_len)
+string static parse_dns_name(const uint8_t* packet, size_t& offset, size_t max_len)
 {
 	string name;
 	size_t current = offset;
@@ -254,7 +254,7 @@ struct
 	uint16_t type = A;
 } args;
 
-int main(int argc, char **argv)
+int main(int argc, char** argv)
 {
 	int position = 0;
 	for (int i = 1; i < argc; i++)
@@ -367,7 +367,7 @@ int main(int argc, char **argv)
 	local_sai.sin_addr.s_addr = INADDR_ANY;
 	local_sai.sin_port = htons(0);
 	{
-		int iResult = bind(s, (const sockaddr *)&local_sai, sizeof(local_sai));
+		int iResult = bind(s, (const sockaddr*)&local_sai, sizeof(local_sai));
 		if (iResult)
 		{
 			cout << "bind error: " << iResult;
@@ -429,12 +429,17 @@ int main(int argc, char **argv)
 
 	cout << '\n';
 	struct sockaddr_in dns_server = {};
-	int dns_size = sizeof(dns_server);
+	#ifdef _WIN32
+	int dns_size;
+#else
+	unsigned int dns_size;
+#endif
+	dns_size = sizeof(dns_server);
 	inet_pton(AF_INET, args.dns.c_str(), &(dns_server.sin_addr));
 	dns_server.sin_family = AF_INET;
 	dns_server.sin_port = htons(args.dns_port);
 	{
-		int iResult = sendto(s, (const char *)packet.data(), packet.size(), 0, (sockaddr *)&dns_server, sizeof(dns_server));
+		int iResult = sendto(s, (const char*)packet.data(), packet.size(), 0, (sockaddr*)&dns_server, sizeof(dns_server));
 		if (iResult == -1)
 		{
 			printError("Sendto() error: ");
@@ -444,7 +449,7 @@ int main(int argc, char **argv)
 		cout << "Sended " << iResult << " bytes to resolve the domain name " << args.domain << " to DNS " << args.dns << ":" << args.dns_port << "...\n\n";
 	}
 	uint8_t response[BUF_SIZE] = {};
-	int n = recvfrom(s, (char *)&response, BUF_SIZE - 1, 0, (sockaddr *)&dns_server, (unsigned int *)&dns_size);
+	int n = recvfrom(s, (char*)&response, BUF_SIZE - 1, 0, (sockaddr*)&dns_server, &dns_size);
 	if (n < 0)
 	{
 		printError("recvfrom() error: ");
@@ -509,9 +514,9 @@ int main(int argc, char **argv)
 			stringstream ipv4;
 
 			ipv4 << (int)response[offset] << "."
-				 << (int)response[offset + 1] << "."
-				 << (int)response[offset + 2] << "."
-				 << (int)response[offset + 3];
+				<< (int)response[offset + 1] << "."
+				<< (int)response[offset + 2] << "."
+				<< (int)response[offset + 3];
 			ipv4s.push_back(ipv4.str());
 			offset += 4;
 			break;
@@ -526,9 +531,9 @@ int main(int argc, char **argv)
 				offset += rdlen;
 				break;
 			}
-			uint16_t priority = ntohs(*(uint16_t*) &response[offset]);
+			uint16_t priority = ntohs(*(uint16_t*)&response[offset]);
 			offset += 2;
-			std::pair<uint16_t, string> mail_server = std::make_pair(priority, parse_dns_name(response,offset,n));
+			std::pair<uint16_t, string> mail_server = std::make_pair(priority, parse_dns_name(response, offset, n));
 			mxs.push_back(mail_server);
 			break;
 		}
